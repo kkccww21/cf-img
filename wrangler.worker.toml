@@ -25,10 +25,11 @@ not_found_handling = "single-page-application"
 # TG_BOT_TOKEN = ""
 # TG_CHAT_ID = ""
 
-# [[d1_databases]]
-# binding = "img_d1"
-# database_name = "img_d1"
-# database_id = ""
+[[d1_databases]]
+binding = "img_d1"
+database_name = "img_d1"
+database_id = "0ec45fbb-a063-4157-9e97-d54fbb98f005"
+
 
 # [[r2_buckets]]
 # binding = "img_r2"

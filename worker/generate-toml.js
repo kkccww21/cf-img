@@ -29,6 +29,9 @@ compatibility_date = "2024-08-21"
 directory = "./frontend-dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+
+[cache]
+enabled = true
 `;
 
 // D1 数据库

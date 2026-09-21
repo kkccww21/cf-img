@@ -32,6 +32,9 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # 在名为 env 的 GitHub Environment 中配置 secrets/variables。
+    # 绑定环境后，该环境的 secrets 会注入 secrets 上下文、variables 会注入 vars 上下文。
+    environment: env
     # 仅在 fork 仓库且配置了 Cloudflare secrets 时运行
     # 原仓库 push 和未配置 secrets 的 fork 不会触发部署
     if: ${{ github.event.repository.fork }}
@@ -67,8 +70,8 @@ jobs:
       - name: Generate wrangler.worker.toml
         if: steps.check.outputs.skip != 'true'
         env:
-          WORKER_NAME: ${{ inputs.worker_name || secrets.WORKER_NAME }}
-          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          WORKER_NAME: ${{ inputs.worker_name || vars.WORKER_NAME }}
+          D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
           KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
           WORKER_VARS: ${{ secrets.WORKER_VARS }}

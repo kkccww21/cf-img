@@ -53,7 +53,9 @@ export function setCommonHeaders(headers, encodedFileName, fileType, Referer, ur
     headers.set('Content-Disposition', `inline; filename="${encodedFileName}"; filename*=UTF-8''${encodedFileName}`);
     headers.set('Access-Control-Allow-Origin', '*');
     headers.set('Accept-Ranges', 'bytes');
-    headers.set('Vary', 'Range');
+    // 注意：不能带 `Vary: Range`。Cloudflare 边缘缓存不支持该 Vary 头，
+    // 会导致响应完全不可被边缘缓存。Range 请求无需 Worker 处理：
+    // CF 边缘缓存存储完整 200 响应后会对 range 请求透明切片。
 
     if (fileType) {
         headers.set('Content-Type', fileType);
@@ -98,11 +100,18 @@ export function handleHeadRequest(headers, etag = null) {
 
 export async function getFileContent(request, targetUrl, max_retries = 2) {
     let retries = 0;
+    // 去掉 Range / 条件请求头，确保源端始终返回完整 200 响应：
+    // 206/304 无法被 CF 边缘缓存，只有完整 200 才会被存入边缘，
+    // 之后的 Range 请求由 CF 边缘缓存透明切片。
+    const fetchHeaders = new Headers(request.headers);
+    fetchHeaders.delete('Range');
+    fetchHeaders.delete('If-None-Match');
+    fetchHeaders.delete('If-Modified-Since');
     while (retries <= max_retries) {
         try {
             const response = await fetch(targetUrl, {
                 method: request.method,
-                headers: request.headers,
+                headers: fetchHeaders,
                 body: request.body,
             });
             if (response.ok || response.status === 304) {

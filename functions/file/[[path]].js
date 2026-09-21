@@ -4,7 +4,7 @@ import { TelegramAPI } from "../utils/telegramAPI";
 import { DiscordAPI } from "../utils/discordAPI";
 import { HuggingFaceAPI } from "../utils/huggingfaceAPI";
 import {
-    setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel,
+    setCommonHeaders, handleHeadRequest, getFileContent, isTgChannel,
     returnWithCheck, return404, returnBlockImg, isDomainAllowed
 } from './fileTools';
 import { getDatabase } from '../utils/databaseAdapter.js';
@@ -215,25 +215,11 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
         });
     }
 
-    // 检查Range请求头
-    const range = request.headers.get('Range');
-    let rangeStart = 0;
-    let rangeEnd = totalSize - 1;
-    let isRangeRequest = false;
-
-    if (range) {
-        const matches = range.match(/bytes=(\d+)-(\d*)/);
-        if (matches) {
-            rangeStart = parseInt(matches[1]);
-            rangeEnd = matches[2] ? parseInt(matches[2]) : totalSize - 1;
-            isRangeRequest = true;
-
-            // 验证范围有效性
-            if (rangeStart >= totalSize || rangeEnd >= totalSize || rangeStart > rangeEnd) {
-                return new Response('Range Not Satisfiable', { status: 416 });
-            }
-        }
-    }
+    // 忽略 Range 请求：始终返回完整 200 响应，这样 CF 边缘缓存才能存入它
+    // （CF 边缘不缓存 206；缓存完整对象后 range 请求由边缘透明切片）。
+    // rangeStart/rangeEnd 固定为全文件范围，下方流式逻辑因此输出完整文件。
+    const rangeStart = 0;
+    const rangeEnd = totalSize - 1;
 
     // 处理HEAD请求
     if (request.method === 'HEAD') {
@@ -241,7 +227,7 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
     }
 
     try {
-        // 创建支持Range请求的流
+        // 创建完整文件流
         const stream = new ReadableStream({
             async start(controller) {
                 try {
@@ -250,17 +236,6 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
                     for (let i = 0; i < chunks.length; i++) {
                         const chunk = chunks[i];
                         const chunkSize = chunk.size || 0;
-
-                        // 如果当前分片完全在请求范围之前，跳过
-                        if (currentPosition + chunkSize <= rangeStart) {
-                            currentPosition += chunkSize;
-                            continue;
-                        }
-
-                        // 如果当前分片完全在请求范围之后，结束
-                        if (currentPosition > rangeEnd) {
-                            break;
-                        }
 
                         // 获取分片数据（支持代理域名）
                         const chunkData = await fetchTelegramChunkWithRetry(TgBotToken, chunk, TgProxyUrl, 3);
@@ -290,22 +265,12 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
             }
         });
 
-        // 设置Range相关头部
-        if (isRangeRequest) {
-            setRangeHeaders(headers, rangeStart, rangeEnd, totalSize);
-
-            return new Response(stream, {
-                status: 206, // Partial Content
-                headers,
-            });
-        } else {
-            headers.set('Cache-Control', 'private, max-age=86400'); // CDN 不缓存完整文件，避免 CDN 不支持 Range 请求
-
-            return new Response(stream, {
-                status: 200,
-                headers,
-            });
-        }
+        // 完整 200 响应 + public Cache-Control（来自 setCommonHeaders，默认 30 天）
+        // → 存入 CF 边缘缓存；range 请求由边缘透明切片。
+        return new Response(stream, {
+            status: 200,
+            headers,
+        });
 
     } catch (error) {
         return new Response(`Error: Failed to reconstruct chunked file - ${error.message}`, { status: 500 });
@@ -406,25 +371,11 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
         });
     }
 
-    // 检查Range请求头
-    const range = request.headers.get('Range');
-    let rangeStart = 0;
-    let rangeEnd = totalSize - 1;
-    let isRangeRequest = false;
-
-    if (range) {
-        const matches = range.match(/bytes=(\d+)-(\d*)/);
-        if (matches) {
-            rangeStart = parseInt(matches[1]);
-            rangeEnd = matches[2] ? parseInt(matches[2]) : totalSize - 1;
-            isRangeRequest = true;
-
-            // 验证范围有效性
-            if (rangeStart >= totalSize || rangeEnd >= totalSize || rangeStart > rangeEnd) {
-                return new Response('Range Not Satisfiable', { status: 416 });
-            }
-        }
-    }
+    // 忽略 Range 请求：始终返回完整 200 响应，这样 CF 边缘缓存才能存入它
+    // （CF 边缘不缓存 206；缓存完整对象后 range 请求由边缘透明切片）。
+    // rangeStart/rangeEnd 固定为全文件范围，下方流式逻辑因此输出完整文件。
+    const rangeStart = 0;
+    const rangeEnd = totalSize - 1;
 
     // 处理HEAD请求
     if (request.method === 'HEAD') {
@@ -432,7 +383,7 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
     }
 
     try {
-        // 创建支持Range请求的流
+        // 创建完整文件流
         const stream = new ReadableStream({
             async start(controller) {
                 try {
@@ -441,17 +392,6 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
                     for (let i = 0; i < chunks.length; i++) {
                         const chunk = chunks[i];
                         const chunkSize = chunk.size || 0;
-
-                        // 如果当前分片完全在请求范围之前，跳过
-                        if (currentPosition + chunkSize <= rangeStart) {
-                            currentPosition += chunkSize;
-                            continue;
-                        }
-
-                        // 如果当前分片完全在请求范围之后，结束
-                        if (currentPosition > rangeEnd) {
-                            break;
-                        }
 
                         // 获取分片数据（每次通过 API 获取新的附件 URL）
                         const chunkData = await fetchDiscordChunkWithRetry(botToken, metadata.DiscordChannelId, chunk, proxyUrl, 3);
@@ -481,22 +421,12 @@ async function handleDiscordChunkedFile(context, imgRecord, encodedFileName, fil
             }
         });
 
-        // 设置Range相关头部
-        if (isRangeRequest) {
-            setRangeHeaders(headers, rangeStart, rangeEnd, totalSize);
-
-            return new Response(stream, {
-                status: 206, // Partial Content
-                headers,
-            });
-        } else {
-            headers.set('Cache-Control', 'private, max-age=86400');
-
-            return new Response(stream, {
-                status: 200,
-                headers,
-            });
-        }
+        // 完整 200 响应 + public Cache-Control（来自 setCommonHeaders，默认 30 天）
+        // → 存入 CF 边缘缓存；range 请求由边缘透明切片。
+        return new Response(stream, {
+            status: 200,
+            headers,
+        });
 
     } catch (error) {
         return new Response(`Error: Failed to reconstruct Discord chunked file - ${error.message}`, { status: 500 });
@@ -564,33 +494,9 @@ async function handleR2File(context, fileId, encodedFileName, fileType) {
 
         const R2DataBase = env.img_r2;
 
-        // 检查Range请求头
-        const range = request.headers.get('Range');
-        let object;
-
-        if (range) {
-            // 处理Range请求
-            const matches = range.match(/bytes=(\d+)-(\d*)/);
-            if (matches) {
-                const start = parseInt(matches[1]);
-                const end = matches[2] ? parseInt(matches[2]) : undefined;
-
-                const rangeOptions = {
-                    range: {
-                        offset: start
-                    }
-                };
-                if (end !== undefined) {
-                    rangeOptions.range.length = end - start + 1;
-                }
-
-                object = await R2DataBase.get(fileId, rangeOptions);
-            } else {
-                object = await R2DataBase.get(fileId);
-            }
-        } else {
-            object = await R2DataBase.get(fileId);
-        }
+        // 始终获取完整文件：CF 边缘缓存只存储完整 200 响应，
+        // 不向 R2 发 Range，range 请求由边缘缓存透明切片。
+        const object = await R2DataBase.get(fileId);
 
         if (object === null) {
             return new Response('Error: Failed to fetch file', { status: 500 });
@@ -605,18 +511,7 @@ async function handleR2File(context, fileId, encodedFileName, fileType) {
             return handleHeadRequest(headers);
         }
 
-        // 如果是Range请求，设置相应的状态码和头
-        if (range && object.range) {
-            headers.set('Content-Range', `bytes ${object.range.offset}-${object.range.offset + object.range.length - 1}/${object.size}`);
-            headers.set('Content-Length', object.range.length.toString());
-
-            return new Response(object.body, {
-                status: 206, // Partial Content
-                headers,
-            });
-        }
-
-        // 正常请求
+        // 完整 200 响应：可被 CF 边缘缓存（public max-age 由 setCommonHeaders 设置）
         return new Response(object.body, {
             status: 200,
             headers,
@@ -643,14 +538,8 @@ async function handleS3File(context, metadata, encodedFileName, fileType) {
                 return handleHeadRequest(headers);
             }
 
-            // 构建请求头
+            // 构建请求头（不转发 Range，确保 CDN 返回完整 200，便于 CF 边缘缓存）
             const fetchHeaders = {};
-
-            // 支持 Range 请求
-            const range = request.headers.get('Range');
-            if (range) {
-                fetchHeaders['Range'] = range;
-            }
 
             // 通过 CDN 获取文件（直接使用完整路径，无需拼接）
             const response = await fetch(cdnFileUrl, {
@@ -658,7 +547,7 @@ async function handleS3File(context, metadata, encodedFileName, fileType) {
                 headers: fetchHeaders
             });
 
-            if (!response.ok && response.status !== 206) {
+            if (!response.ok) {
                 // CDN 读取失败，回退到 S3 API
                 console.warn(`CDN fetch failed (${response.status}), falling back to S3 API`);
                 return await handleS3FileViaAPI(context, metadata, encodedFileName, fileType);
@@ -671,9 +560,6 @@ async function handleS3File(context, metadata, encodedFileName, fileType) {
             // 复制相关头部
             if (response.headers.get('Content-Length')) {
                 headers.set('Content-Length', response.headers.get('Content-Length'));
-            }
-            if (response.headers.get('Content-Range')) {
-                headers.set('Content-Range', response.headers.get('Content-Range'));
             }
 
             return new Response(response.body, {
@@ -710,17 +596,12 @@ async function handleS3FileViaAPI(context, metadata, encodedFileName, fileType) 
     const key = metadata?.S3FileKey;
 
     try {
-        // 检查Range请求头
-        const range = request.headers.get('Range');
+        // 不传 Range 参数，始终获取完整对象（CF 边缘缓存只存完整 200，
+        // range 请求由边缘缓存透明切片）
         const commandParams = {
             Bucket: bucketName,
             Key: key
         };
-
-        if (range) {
-            // 添加Range参数用于部分内容请求
-            commandParams.Range = range;
-        }
 
         const command = new GetObjectCommand(commandParams);
         const response = await s3Client.send(command);
@@ -729,13 +610,9 @@ async function handleS3FileViaAPI(context, metadata, encodedFileName, fileType) 
         const headers = new Headers();
         setCommonHeaders(headers, encodedFileName, fileType, Referer, url);
 
-        // 设置Content-Length和Content-Range头
+        // 设置Content-Length头
         if (response.ContentLength) {
             headers.set('Content-Length', response.ContentLength.toString());
-        }
-
-        if (response.ContentRange) {
-            headers.set('Content-Range', response.ContentRange);
         }
 
         // 处理HEAD请求
@@ -743,10 +620,9 @@ async function handleS3FileViaAPI(context, metadata, encodedFileName, fileType) 
             return handleHeadRequest(headers);
         }
 
-        // 返回响应，支持流式传输
-        const statusCode = range ? 206 : 200; // Range请求返回206 Partial Content
+        // 返回完整的 200 响应（可被 CF 边缘缓存）
         return new Response(response.Body, {
-            status: statusCode,
+            status: 200,
             headers
         });
 
@@ -784,19 +660,16 @@ async function handleDiscordFile(context, metadata, encodedFileName, fileType) {
             return handleHeadRequest(headers);
         }
 
-        // 获取文件内容（支持 Range 请求）
+        // 获取文件内容（不转发 Range，确保源端返回完整 200，便于 CF 边缘缓存；
+        // range 请求由 CF 边缘缓存透明切片）
         const fetchHeaders = {};
-        const range = request.headers.get('Range');
-        if (range) {
-            fetchHeaders['Range'] = range;
-        }
 
         const response = await fetch(fileUrl, {
             method: 'GET',
             headers: fetchHeaders
         });
 
-        if (!response.ok && response.status !== 206) {
+        if (!response.ok) {
             return new Response(`Error: Failed to fetch from Discord - ${response.status}`, { status: response.status });
         }
 
@@ -807,9 +680,6 @@ async function handleDiscordFile(context, metadata, encodedFileName, fileType) {
         // 复制相关头部
         if (response.headers.get('Content-Length')) {
             headers.set('Content-Length', response.headers.get('Content-Length'));
-        }
-        if (response.headers.get('Content-Range')) {
-            headers.set('Content-Range', response.headers.get('Content-Range'));
         }
 
         return new Response(response.body, {
@@ -855,18 +725,15 @@ async function handleHuggingFaceFile(context, metadata, encodedFileName, fileTyp
             fetchHeaders['Authorization'] = `Bearer ${hfToken}`;
         }
 
-        // 支持 Range 请求
-        const range = request.headers.get('Range');
-        if (range) {
-            fetchHeaders['Range'] = range;
-        }
+        // 支持 Range 请求：不转发给源端（保持完整 200 可被 CF 边缘缓存），
+        // range 请求由 CF 边缘缓存透明切片
 
         const response = await fetch(fileUrl, {
             method: 'GET',
             headers: fetchHeaders
         });
 
-        if (!response.ok && response.status !== 206) {
+        if (!response.ok) {
             return new Response(`Error: Failed to fetch from HuggingFace - ${response.status}`, { status: response.status });
         }
 
@@ -877,9 +744,6 @@ async function handleHuggingFaceFile(context, metadata, encodedFileName, fileTyp
         // 复制相关头部
         if (response.headers.get('Content-Length')) {
             headers.set('Content-Length', response.headers.get('Content-Length'));
-        }
-        if (response.headers.get('Content-Range')) {
-            headers.set('Content-Range', response.headers.get('Content-Range'));
         }
 
         return new Response(response.body, {
